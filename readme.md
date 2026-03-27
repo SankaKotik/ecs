@@ -96,8 +96,8 @@ Use `despawn` to mark the entity for destruction, call `cleanupDeleted(w)` to re
 Use `declare_ecs_system` to define a new overload for calling a bunch of unknown functions at once.  
 Use `ecs_system` to add a the function instance to the system.  
 Use `before procname` and `after procname` to restrict the order of execution.
-- `ecs_system count(), (this: ShoutMyName).shout: body` - add a proc with name "sout" to the system (body will be automatically wrapped in forEach)
-- `ecs_system count(), shout: body` - add a proc with name "sout" to the system
+- `ecs_system count(), (this: ShoutMyName).shout: body` - add a proc with name "shout" to the system (body will be automatically wrapped in forEach)
+- `ecs_system count(), shout: body` - add a proc with name "shout" to the system
 - `ecs_system count(), (this: ShoutMyName): body` - add a proc with name "(this: ShoutMyName)" to the system (body will be automatically wrapped in forEach)
 - `ecs_system count(): body` - add a proc with name "anonimus" to the system
 
