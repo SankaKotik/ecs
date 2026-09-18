@@ -654,18 +654,12 @@ proc add*[T](wc: var ComponentRecord, val: T) =
 
 
 proc archetypeRecordGetter(w: NimNode, components: seq[NimNode]): NimNode =
+  ## assumes there are no duplicates in components
   let archetype = archetypeFromSym(components[0..^1])
   let componentsSorted = components.toSeq.sortedByIt(it.typeidFromSym)
   var orCreate = nnkBracket.newTree()
-  block:
-    var exists: seq[int]
-    for x in componentsSorted:
-      let tid = x.typeidFromSym
-      if tid in exists:
-        error("component of this type has already been listed", x)
-      else:
-        exists.add tid
-        orCreate.add newCall(bindSym("componentRecordConstructorFromSym"), x.getRuntimeTypeInst)
+  for x in componentsSorted:
+    orCreate.add newCall(bindSym("componentRecordConstructorFromSym"), x.getRuntimeTypeInst)
   
   newCall(
     bindSym("getOrCreateArchetypeRecord"),
@@ -749,28 +743,47 @@ proc allocEntitySlot(w: World): tuple[index: int, generation: int32] =
     w.entities.setLen(w.entities.len + 1)
 
 
-macro spawnImpl*(w: World, components: varargs[typed]): EntityId =
-  result = newStmtList()
+proc parseComponentsForSpawn(components: openArray[NimNode], scope: NimNode): tuple[types: seq[NimNode], values: seq[NimNode]] =
+  var exists: Table[int, tuple[groupId: int, idx: int]]  # typeId -> groupId
+  var lastGroupId = 0
 
-  var expandedTypes: seq[NimNode]
-  var expandedValues: seq[NimNode]
+  proc addToRes(comp, val: NimNode, types, values: var seq[NimNode], groupId: int) =
+    let tid = comp.typeidFromSym
+    if tid in exists:
+      if exists[tid].groupId == groupId:
+        error("component of this type has already been listed", comp)
+      else:
+        types[exists[tid].idx] = comp
+        values[exists[tid].idx] = val
+        exists[tid].groupId = groupId
+    elif tid == typeid(EntityId).int:
+      error("unable to add EntityId as a component for Entity", comp)
+    else:
+      types.add comp
+      values.add val
+      exists[tid] = (groupId, types.high)
+
   for comp in components[0..^1]:
     let ti = comp.getTypeInst()
     if ti.kind == nnkTupleConstr:
+      inc lastGroupId
       let tmp = genSym(nskLet, "tupleComps")
-      result.add nnkLetSection.newTree(
+      scope.add nnkLetSection.newTree(
         nnkIdentDefs.newTree(tmp, newEmptyNode(), comp)
       )
       for i in 0..<ti.len:
-        expandedTypes.add ti[i]
-        expandedValues.add nnkBracketExpr.newTree(tmp, newLit(i))
+        addToRes(ti[i], nnkBracketExpr.newTree(tmp, newLit(i)), result.types, result.values, lastGroupId)
     else:
-      expandedTypes.add comp
-      expandedValues.add comp
+      addToRes(comp, comp, result.types, result.values, 0)
 
+
+macro spawnImpl*(w: World, components: varargs[typed]): EntityId =
+  result = newStmtList()
+
+  let (expandedTypes, expandedValues) = parseComponentsForSpawn(components[0..^1], result)
   let compTypes = bindSym("EntityId") & expandedTypes
   let compValues = bindSym("EntityId") & expandedValues
-  let archetype = archetypeFromSym(compTypes[0..^1])
+  let archetype = archetypeFromSym(compTypes)
   let entityComponents = genSym(nskLet, "entityComponents")
   let eidSlot = genSym(nskLet, "eidSlot")
 
@@ -891,8 +904,10 @@ proc teleportClone*(dest, src: World, entity: EntityId): EntityId =
 macro respawn*(w: World, entity: EntityId, components: varargs[typed]) =
   result = newStmtList()
 
-  let components = bindSym("EntityId") & components[0..^1]
-  let archetype = archetypeFromSym(components[0..^1])
+  let (expandedTypes, expandedValues) = parseComponentsForSpawn(components[0..^1], result)
+  let compTypes = bindSym("EntityId") & expandedTypes
+  let compValues = bindSym("EntityId") & expandedValues
+  let archetype = archetypeFromSym(compTypes)
   let entityComponents = genSym(nskLet, "entityComponents")
   let entityId = genSym(nskLet, "entityId")
   let savedGen = genSym(nskLet, "savedGen")
@@ -901,7 +916,7 @@ macro respawn*(w: World, entity: EntityId, components: varargs[typed]) =
     nnkIdentDefs.newTree(
       entityComponents,
       newEmptyNode(),
-      archetypeRecordGetter(w, components),
+      archetypeRecordGetter(w, compTypes),
     ),
     nnkIdentDefs.newTree(
       entityId,
@@ -917,7 +932,7 @@ macro respawn*(w: World, entity: EntityId, components: varargs[typed]) =
     preRemoveEntity(`w`, `entityId`)
     `w`.entities[entityIndex(`entityId`)] = `ctor`
 
-  genAssignComponents(w, components, components, entityId, entityComponents, result)
+  genAssignComponents(w, compTypes, compValues, entityId, entityComponents, result)
 
 
 proc despawn*(w: World, entity: EntityId) =
