@@ -4,7 +4,7 @@ export tables.hasKey, tables.`[]`
 
 type
   TypeId* = distinct int
-    ## index of the type in typeIds seq
+    ## stable hash of the component type name; 0 is reserved for EntityId
 
   Archetype* {.shallow.} = seq[TypeId]
     ## a set of types
@@ -56,6 +56,7 @@ type
 
 var typeIds* {.compileTime.}: seq[string]
 var typeIdSignatureHashes {.compileTime.}: seq[string]
+var typeIdValues {.compileTime.}: seq[int]
 
 
 # =====================
@@ -113,6 +114,14 @@ macro quoteWithoutLineInfo(body: untyped): NimNode =
 # --- typeid ----
 # ===============
 
+proc simpleHash(s: string): int =
+  ## simple deterministic FNV-1a hash.
+  var h = 0xcbf29ce484222325'u64
+  for c in s:
+    h = (h xor uint64(uint8(c))) * 0x100000001b3'u64
+  int(h and 0x3FFFFFFFFFFFFFFF'u64) + 1
+
+
 proc typeidFromSym(typSym: NimNode): int =
   let typ = typSym.getRuntimeTypeInst
   let typHash = if typ.kind == nnkSym: typ.signatureHash else: "0"
@@ -122,13 +131,17 @@ proc typeidFromSym(typSym: NimNode): int =
   if i == -1:
     typeIds.add typename
     typeIdSignatureHashes.add typHash
-    typeIds.high
+    if typename == "EntityId":
+      typeIdValues.add 0
+    else:
+      typeIdValues.add simpleHash(typename)
+    typeIdValues[^1]
   else:
     if typeIdSignatureHashes[i] == "":
       typeIdSignatureHashes[i] = typHash
     elif typeIdSignatureHashes[i] != typHash:
       error("Unable to register diffirent types with same name: " & typ.repr, typSym)
-    i
+    typeIdValues[i]
 
 macro typeid*(typ: typedesc): TypeId =
   newCall(bindSym("TypeId"), newLit(typeidFromSym(typ)))
@@ -137,7 +150,10 @@ macro typeid*(typ: typedesc): TypeId =
 proc `==`*(a, b: TypeId): bool {.borrow.}
 
 proc `$`*(x: TypeId): string =
-  typeIds[x.int]
+  for i in 0..<typeIdValues.len:
+    if typeIdValues[i] == x.int:
+      return typeIds[i]
+  "TypeId(" & $x.int & ")"
 
 
 proc contains*(subarh, arh: Archetype): bool =
@@ -192,16 +208,18 @@ proc storeTypeIds*(filename: string) {.compileTime.} =
   writeFile filename, typeIds.join("\n")
 
 proc retainTypeIds*(filename: string) {.compileTime.} =
-  ## loads type ids from a file, can be used to ensure ABI-compatibility
+  ## loads type names from a file, can be used to ensure ABI-compatibility.
+  ## TypeIds are hash-based and stable across compilations on their own,
+  ## so this only pre-populates the name registry.
   let newTypeIds = readFile(filename).splitLines
-  for i, x in newTypeIds:
-    if i < typeIds.len and x != typeIds[i]:
-      error("TypeId mistmatch for index " & $i & " (should be " & x & ", but already used as " & typeIds[i] & ")")
-  
-  typeIds = newTypeIds
-
-  while typeIdSignatureHashes.len < typeIds.len:
-    typeIdSignatureHashes.add ""  # unknown yet
+  for name in newTypeIds:
+    if typeIds.find(name) == -1:
+      typeIds.add name
+      typeIdSignatureHashes.add ""  # unknown yet
+      if name == "EntityId":
+        typeIdValues.add 0
+      else:
+        typeIdValues.add simpleHash(name)
 
 
 
@@ -427,7 +445,7 @@ macro forEach*(w: World, query: untyped, body: untyped) =
         else:
           let castedValue = quote do: cast[ptr UncheckedArray[`seqType`]](`cquery`[static(find(`carh`, typeid(`varType`)))][].data)[][`idx`]
           outVars[name] = quote do:
-            template `nameN`: `varType` = `castedValue`
+            template `nameN`: `varType` {.used.} = `castedValue`
     
     # opt Typ
     # ? Typ
