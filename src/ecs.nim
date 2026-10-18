@@ -1350,7 +1350,7 @@ proc declare_ecs_system_impl(signature, rettype: NimNode): NimNode =
   CacheTable("ecs systems")[systemName] = nnkPar.newTree(runType, systemDefs, rettype)
 
   let params = formalParamsFromSignature(signature, rettype)
-  params.insert 1, nnkIdentDefs.newTree(w, nnkVarTy.newTree(bindSym("World")), newEmptyNode())
+  params.insert 1, nnkIdentDefs.newTree(w, bindSym("World"), newEmptyNode())
   var procParams = copy(params)
 
   if rettype.kind != nnkEmpty:
@@ -1452,7 +1452,7 @@ proc ecs_system_impl(signature, args, body: NimNode): NimNode =
       args
 
   let params = formalParamsFromSignature(signature, newEmptyNode())
-  params.insert 1, nnkIdentDefs.newTree(ident("w"), nnkVarTy.newTree(bindSym("World")), newEmptyNode())
+  params.insert 1, nnkIdentDefs.newTree(ident("w"), bindSym("World"), newEmptyNode())
 
   if rettype.kind != nnkEmpty:
     params.add nnkIdentDefs.newTree(ident("result"), nnkVarTy.newTree(rettype), newEmptyNode())
